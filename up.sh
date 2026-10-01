@@ -47,6 +47,7 @@ docker build -f connect/Dockerfile.strimzi -t "local/strimzi-connect-debezium:${
 docker pull "quay.io/strimzi/operator:${STRIMZI_VERSION}"
 docker pull "quay.io/strimzi/kafka:${STRIMZI_VERSION}-kafka-4.3.1"
 docker pull postgres:16
+docker pull redis:8.0
 docker pull provectuslabs/kafka-ui:v0.7.2
 docker pull grafana/grafana:11.3.1
 docker pull grafana/tempo:2.6.1
@@ -61,6 +62,7 @@ for image in \
   "quay.io/strimzi/operator:${STRIMZI_VERSION}" \
   "quay.io/strimzi/kafka:${STRIMZI_VERSION}-kafka-4.3.1" \
   postgres:16 \
+  redis:8.0 \
   provectuslabs/kafka-ui:v0.7.2 \
   grafana/grafana:11.3.1 \
   grafana/tempo:2.6.1 \
@@ -92,6 +94,7 @@ kubectl apply -f k8s/monitoring/
 echo "==> Waiting for everything to come up"
 kubectl wait kafka/outbox -n kafka --for=condition=Ready --timeout=300s
 kubectl wait kafkaconnect/outbox-connect -n kafka --for=condition=Ready --timeout=180s
+kubectl rollout status deployment/redis -n kafka
 kubectl rollout status deployment/rest-service -n kafka
 kubectl rollout status deployment/email-service -n kafka
 kubectl rollout status deployment/grafana -n monitoring

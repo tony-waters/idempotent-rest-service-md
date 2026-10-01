@@ -1,0 +1,46 @@
+# Redis on Kind: single-instance Deployment, caches Idempotency-Key -> orderId mappings for
+# rest-service (see #5, ADR 0006). No persistence: losing the cache on restart just means a
+# retry within the TTL window creates a duplicate Order instead of being deduplicated.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: kafka
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379

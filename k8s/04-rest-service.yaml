@@ -44,6 +44,10 @@ spec:
                   key: POSTGRES_PASSWORD
             - name: MANAGEMENT_OPENTELEMETRY_TRACING_EXPORT_OTLP_ENDPOINT
               value: http://tempo.monitoring.svc:4318/v1/traces
+            - name: SPRING_DATA_REDIS_HOST
+              value: redis
+            - name: SPRING_DATA_REDIS_PORT
+              value: "6379"
           livenessProbe:
             httpGet:
               path: /actuator/health
