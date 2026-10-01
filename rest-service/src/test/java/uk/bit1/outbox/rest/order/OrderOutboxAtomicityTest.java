@@ -1,5 +1,6 @@
 package uk.bit1.outbox.rest.order;
 
+import com.redis.testcontainers.RedisContainer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -24,6 +25,10 @@ class OrderOutboxAtomicityTest {
     @ServiceConnection
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16");
 
+    @Container
+    @ServiceConnection
+    static RedisContainer redis = new RedisContainer("redis:8.0");
+
     @MockitoBean
     private OutboxEventRepository outboxEventRepository;
 
@@ -38,7 +43,7 @@ class OrderOutboxAtomicityTest {
         when(outboxEventRepository.save(any())).thenThrow(new RuntimeException("simulated outbox write failure"));
         CreateOrderRequest request = new CreateOrderRequest("fail@example.com", BigDecimal.TEN);
 
-        assertThatThrownBy(() -> orderService.createOrder(request))
+        assertThatThrownBy(() -> orderService.createOrder("atomicity-test-key", request))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessage("simulated outbox write failure");
 

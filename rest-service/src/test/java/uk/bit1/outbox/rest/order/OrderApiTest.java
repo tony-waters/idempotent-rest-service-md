@@ -1,10 +1,13 @@
 package uk.bit1.outbox.rest.order;
 
+import com.redis.testcontainers.RedisContainer;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -25,14 +28,25 @@ class OrderApiTest {
     @ServiceConnection
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16");
 
+    @Container
+    @ServiceConnection
+    static RedisContainer redis = new RedisContainer("redis:8.0");
+
     @org.springframework.beans.factory.annotation.Autowired
     private TestRestTemplate restTemplate;
+
+    private static HttpEntity<CreateOrderRequest> withIdempotencyKey(CreateOrderRequest request, String key) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Idempotency-Key", key);
+        return new HttpEntity<>(request, headers);
+    }
 
     @Test
     void createsAndReturnsAnOrder() {
         CreateOrderRequest request = new CreateOrderRequest("customer@example.com", new BigDecimal("19.99"));
 
-        ResponseEntity<OrderResponse> createResponse = restTemplate.postForEntity("/orders", request, OrderResponse.class);
+        ResponseEntity<OrderResponse> createResponse = restTemplate.postForEntity(
+                "/orders", withIdempotencyKey(request, UUID.randomUUID().toString()), OrderResponse.class);
 
         assertThat(createResponse.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         OrderResponse created = createResponse.getBody();

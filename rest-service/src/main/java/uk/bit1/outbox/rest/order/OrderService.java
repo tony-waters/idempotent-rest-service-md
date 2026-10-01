@@ -7,6 +7,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
+import uk.bit1.outbox.rest.idempotency.Idempotent;
+import uk.bit1.outbox.rest.idempotency.IdempotencyKey;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -32,8 +34,9 @@ public class OrderService {
         this.propagator = propagator;
     }
 
+    @Idempotent
     @Transactional
-    public Order createOrder(CreateOrderRequest request) {
+    public Order createOrder(@IdempotencyKey String idempotencyKey, CreateOrderRequest request) {
         Order order = new Order(UUID.randomUUID(), request.customerEmail(), request.amount(), Instant.now());
         orderRepository.save(order);
 
