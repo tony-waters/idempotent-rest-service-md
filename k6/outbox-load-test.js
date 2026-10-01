@@ -28,7 +28,7 @@ const ORDER_COUNT = Number(__ENV.ORDER_COUNT || 20);
 const LOAD_DURATION_SECONDS = Number(__ENV.LOAD_DURATION_SECONDS || 10);
 
 // Must match the resilience4j RateLimiter config in
-// email-service/src/main/java/com/example/outbox/email/order/ConfirmationService.java (see ADR
+// email-service/src/main/java/uk/bit1/outbox/email/order/ConfirmationService.java (see ADR
 // 0002) — that file is the source of truth; these are not read from it automatically.
 const RATE_LIMIT_FOR_PERIOD = Number(__ENV.RATE_LIMIT_FOR_PERIOD || 5);
 const RATE_LIMIT_PERIOD_SECONDS = Number(__ENV.RATE_LIMIT_PERIOD_SECONDS || 10);
