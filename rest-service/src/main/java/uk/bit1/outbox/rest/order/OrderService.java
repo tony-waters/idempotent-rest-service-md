@@ -1,12 +1,12 @@
 package uk.bit1.outbox.rest.order;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import io.micrometer.tracing.propagation.Propagator;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -78,7 +78,7 @@ public class OrderService {
     private String writePayload(Order order) {
         try {
             return objectMapper.writeValueAsString(OrderCreatedPayload.from(order));
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new IllegalStateException("Failed to serialize OrderCreated payload for order " + order.getId(), e);
         }
     }

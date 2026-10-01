@@ -2,9 +2,10 @@ package uk.bit1.outbox.rest.order;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
+import org.springframework.boot.micrometer.tracing.test.autoconfigure.AutoConfigureTracing;
+import org.springframework.boot.resttestclient.TestRestTemplate;
+import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -18,15 +19,16 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-// Spring Boot disables tracing in tests by default (ObservabilityContextCustomizerFactory);
-// re-enable it here since this test asserts on a real, propagator-produced traceparent. The
+// Spring Boot disables tracing in tests by default; @AutoConfigureTracing re-enables it here
+// since this test asserts on a real, propagator-produced traceparent. The
 // OTLP exporter is excluded since there's no collector in the test environment — otherwise
 // every run logs an ERROR-level "connection refused" trying to reach localhost:4318.
-@AutoConfigureObservability
+@AutoConfigureTracing
+@AutoConfigureTestRestTemplate
 @Testcontainers
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "spring.autoconfigure.exclude=org.springframework.boot.actuate.autoconfigure.tracing.otlp.OtlpAutoConfiguration")
+        properties = "spring.autoconfigure.exclude=org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.otlp.OtlpTracingAutoConfiguration")
 class OutboxWriteTest {
 
     @Container

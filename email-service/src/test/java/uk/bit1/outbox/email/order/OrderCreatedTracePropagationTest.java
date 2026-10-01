@@ -1,23 +1,23 @@
 package uk.bit1.outbox.email.order;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
+import org.springframework.boot.micrometer.tracing.test.autoconfigure.AutoConfigureTracing;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.testcontainers.containers.KafkaContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.kafka.ConfluentKafkaContainer;
 import org.testcontainers.utility.DockerImageName;
+import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -31,21 +31,21 @@ import static org.awaitility.Awaitility.await;
 
 // Proves the crux of ADR 0005: a consumed record carrying Debezium's routed "traceparent"
 // header continues that trace (same trace ID) rather than starting a new root span.
-// Spring Boot disables tracing in tests by default (ObservabilityContextCustomizerFactory);
-// @AutoConfigureObservability re-enables it so the real Propagator/Tracer wiring runs. The
+// Spring Boot disables tracing in tests by default; @AutoConfigureTracing re-enables it so
+// the real Propagator/Tracer wiring runs. The
 // OTLP exporter is excluded since there's no collector in the test environment — otherwise
 // every run logs an ERROR-level "connection refused" trying to reach localhost:4318.
-@AutoConfigureObservability
+@AutoConfigureTracing
 @Testcontainers
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "spring.autoconfigure.exclude=org.springframework.boot.actuate.autoconfigure.tracing.otlp.OtlpAutoConfiguration")
+        properties = "spring.autoconfigure.exclude=org.springframework.boot.micrometer.tracing.opentelemetry.autoconfigure.otlp.OtlpTracingAutoConfiguration")
 @Import(OrderCreatedTracePropagationTest.TestTracingConfig.class)
 class OrderCreatedTracePropagationTest {
 
     @Container
     @ServiceConnection
-    static KafkaContainer kafka = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.6.1"));
+    static ConfluentKafkaContainer kafka = new ConfluentKafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.6.1"));
 
     @Autowired
     private KafkaTemplate<String, String> kafkaTemplate;

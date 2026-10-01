@@ -1,9 +1,9 @@
 package uk.bit1.outbox.email.order;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 @Component
 class OrderCreatedListener {
@@ -26,7 +26,7 @@ class OrderCreatedListener {
     private OrderCreatedEvent readEvent(String payload) {
         try {
             return objectMapper.readValue(payload, OrderCreatedEvent.class);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new IllegalStateException("Failed to deserialize OrderCreated payload: " + payload, e);
         }
     }
