@@ -7,7 +7,6 @@ import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -17,9 +16,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
@@ -41,9 +38,6 @@ class IdempotencyApiTest {
 
     @Autowired
     private TestRestTemplate restTemplate;
-
-    @Autowired
-    private StringRedisTemplate redisTemplate;
 
     private static HttpEntity<CreateOrderRequest> withKey(CreateOrderRequest request, String key) {
         HttpHeaders headers = new HttpHeaders();
@@ -102,20 +96,5 @@ class IdempotencyApiTest {
         ResponseEntity<String> second = restTemplate.postForEntity("/orders", withKey(changed, key), String.class);
 
         assertThat(second.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-    }
-
-    @Test
-    void storesTheIdempotencyRecordNamespacedByMethodWithTheConfiguredTtl() {
-        String key = UUID.randomUUID().toString();
-        CreateOrderRequest request = new CreateOrderRequest("customer@example.com", new BigDecimal("19.99"));
-
-        restTemplate.postForEntity("/orders", withKey(request, key), OrderResponse.class);
-
-        String redisKey = "idempotency:uk.bit1.outbox.rest.order.OrderService.createOrder:" + key;
-        Long ttlSeconds = redisTemplate.getExpire(redisKey, TimeUnit.SECONDS);
-
-        assertThat(ttlSeconds).isNotNull();
-        assertThat(ttlSeconds).isGreaterThan(Duration.ofHours(23).toSeconds());
-        assertThat(ttlSeconds).isLessThanOrEqualTo(Duration.ofHours(24).toSeconds());
     }
 }

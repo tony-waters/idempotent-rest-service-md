@@ -6,7 +6,6 @@ import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.reflect.MethodSignature;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.annotation.Order;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.repository.CrudRepository;
 import org.springframework.data.repository.support.Repositories;
 import org.springframework.http.HttpStatus;
@@ -26,71 +25,51 @@ import java.util.UUID;
 // Reusable idempotency mechanism per ADR 0006: guards any @Idempotent method against concurrent
 // or replayed invocation under the same client-supplied key. Runs outside (around) @Transactional
 // so the lock covers the whole business operation and a rollback is visible before the lock is
-// released — see the explicit @Order below.
+// released — see the explicit @Order below. The Redis lock protocol itself lives in
+// IdempotencyStore; this class only does AOP/reflection plumbing and maps outcomes to HTTP.
 @Aspect
 @Component
 @Order(0)
 class IdempotencyAspect {
 
-    private final StringRedisTemplate redisTemplate;
+    private final IdempotencyStore store;
     private final ObjectMapper objectMapper;
-    private final IdempotencyProperties properties;
     private final Repositories repositories;
 
-    IdempotencyAspect(StringRedisTemplate redisTemplate, ObjectMapper objectMapper,
-                       IdempotencyProperties properties, ApplicationContext applicationContext) {
-        this.redisTemplate = redisTemplate;
+    IdempotencyAspect(IdempotencyStore store, ObjectMapper objectMapper, ApplicationContext applicationContext) {
+        this.store = store;
         this.objectMapper = objectMapper;
-        this.properties = properties;
         this.repositories = new Repositories(applicationContext);
     }
-
-    private static final int MAX_LOCK_ATTEMPTS = 2;
 
     @Around("@annotation(Idempotent)")
     Object around(ProceedingJoinPoint joinPoint) throws Throwable {
         Method method = ((MethodSignature) joinPoint.getSignature()).getMethod();
         Object[] args = joinPoint.getArgs();
+        String scope = method.getDeclaringClass().getName() + "." + method.getName();
         String idempotencyKey = extractIdempotencyKey(method, args);
         String fingerprint = fingerprint(method, args);
-        String redisKey = "idempotency:" + method.getDeclaringClass().getName() + "." + method.getName() + ":" + idempotencyKey;
 
-        for (int attempt = 1; attempt <= MAX_LOCK_ATTEMPTS; attempt++) {
-            boolean acquired = Boolean.TRUE.equals(redisTemplate.opsForValue().setIfAbsent(
-                    redisKey, write(new IdempotencyRecord(IdempotencyRecord.Status.IN_PROGRESS, fingerprint, null)), properties.getTtl()));
-            if (acquired) {
-                return proceedAndRecord(joinPoint, redisKey, fingerprint);
-            }
-
-            IdempotencyRecord existing = read(redisTemplate.opsForValue().get(redisKey));
-            if (existing == null) {
-                // Key vanished between the setIfAbsent above and this read (expired, or deleted by
-                // a concurrent failed attempt): retry the atomic acquisition rather than proceeding
-                // without a lock.
-                continue;
-            }
-            if (existing.status() == IdempotencyRecord.Status.IN_PROGRESS) {
-                throw new ResponseStatusException(HttpStatus.TOO_EARLY, "A request with this Idempotency-Key is already in progress");
-            }
-            if (!existing.fingerprint().equals(fingerprint)) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "Idempotency-Key was already used with a different request body");
-            }
-            return replay(method.getReturnType(), existing.resultId());
-        }
-        throw new IllegalStateException("Could not acquire or read idempotency state for " + redisKey + " after " + MAX_LOCK_ATTEMPTS + " attempts");
+        LockResult result = store.tryBegin(scope, idempotencyKey, fingerprint);
+        return switch (result) {
+            case LockResult.Acquired() -> proceedAndRecord(joinPoint, scope, idempotencyKey, fingerprint);
+            case LockResult.InProgress() ->
+                    throw new ResponseStatusException(HttpStatus.TOO_EARLY, "A request with this Idempotency-Key is already in progress");
+            case LockResult.Conflict() ->
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Idempotency-Key was already used with a different request body");
+            case LockResult.Replayable(UUID resultId) -> replay(method.getReturnType(), resultId);
+        };
     }
 
-    private Object proceedAndRecord(ProceedingJoinPoint joinPoint, String redisKey, String fingerprint) throws Throwable {
+    private Object proceedAndRecord(ProceedingJoinPoint joinPoint, String scope, String key, String fingerprint) throws Throwable {
         Object result;
         try {
             result = joinPoint.proceed();
         } catch (Throwable t) {
-            redisTemplate.delete(redisKey);
+            store.release(scope, key);
             throw t;
         }
-        UUID id = extractId(result);
-        redisTemplate.opsForValue().set(redisKey,
-                write(new IdempotencyRecord(IdempotencyRecord.Status.COMPLETED, fingerprint, id)), properties.getTtl());
+        store.complete(scope, key, fingerprint, extractId(result));
         return result;
     }
 
@@ -135,13 +114,5 @@ class IdempotencyAspect {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
-    }
-
-    private String write(IdempotencyRecord record) {
-        return objectMapper.writeValueAsString(record);
-    }
-
-    private IdempotencyRecord read(String json) {
-        return json == null ? null : objectMapper.readValue(json, IdempotencyRecord.class);
     }
 }
