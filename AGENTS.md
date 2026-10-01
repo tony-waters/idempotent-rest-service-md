@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues are tracked on GitHub (tony-waters/transactional-outbox-pattern-mp) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues are tracked on GitHub (tony-waters/idempotent-rest-service-md) via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
