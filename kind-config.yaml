@@ -1,0 +1,10 @@
+# Kind cluster topology for the production-like HA path (see docs/adr/0003, docs/adr/0004).
+# 1 control-plane + 3 worker nodes: the 3 workers give Strimzi's 3 Kafka brokers a distinct
+# node each via pod anti-affinity, so losing one node can't take out more than one broker.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+  - role: worker

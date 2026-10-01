@@ -1,0 +1,207 @@
+# Grafana, adapted from Strimzi's bundled example
+# (examples/metrics/grafana-install/grafana.yaml in strimzi-kafka-operator, tag 1.2.0): same
+# Deployment/Service shape, retargeted at `monitoring`, exposed via NodePort like every other
+# service in this repo, with the Prometheus/Tempo datasources and the custom dashboard below
+# auto-provisioned from files so there's no manual "click through the UI" setup step (see #16,
+# #17 for the Tempo datasource).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        uid: prometheus
+        url: http://prometheus-operated.monitoring.svc:9090
+        isDefault: true
+      - name: Tempo
+        type: tempo
+        access: proxy
+        uid: tempo
+        url: http://tempo.monitoring.svc:3200
+        jsonData:
+          # Points the trace view's "Node Graph" tab at Prometheus, where Tempo's
+          # metrics-generator remote_writes the service-graph edges it derives from spans.
+          serviceMap:
+            datasourceUid: prometheus
+          nodeGraph:
+            enabled: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provisioning
+  namespace: monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: outbox
+        type: file
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-outbox
+  namespace: monitoring
+data:
+  outbox-pattern.json: |
+    {
+      "title": "Outbox Pattern in Action",
+      "uid": "outbox-pattern",
+      "schemaVersion": 39,
+      "editable": true,
+      "refresh": "10s",
+      "time": { "from": "now-15m", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Orders created vs. confirmation emails sent (throttling)",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(http_server_requests_seconds_count{uri=\"/orders\", method=\"POST\"}[1m]))",
+              "legendFormat": "orders created / s",
+              "refId": "A"
+            },
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(emails_sent_total[1m]))",
+              "legendFormat": "emails sent / s",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "outbox.event.order consumer lag",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(kafka_consumergroup_lag{topic=\"outbox.event.order\"}) by (consumergroup)",
+              "legendFormat": "{{consumergroup}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Kafka partition leadership by broker",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "kafka_server_replicamanager_leadercount",
+              "legendFormat": "{{kubernetes_pod_name}}",
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.3.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # No auth in this prototype (see README's Notes) — anonymous Admin access removes
+            # the login step for a local demo cluster nobody else can reach.
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Admin"
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboard-provisioning
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provisioning
+          configMap:
+            name: grafana-dashboard-provisioning
+        - name: dashboards
+          configMap:
+            name: grafana-dashboard-outbox
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  type: NodePort
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30300
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # Exposes Prometheus's own UI (targets/graph pages) for debugging scrape health directly,
+  # same "reachable via NodePort, no port-forward" convention as every other service here.
+  name: prometheus-nodeport
+  namespace: monitoring
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: prometheus
+    prometheus: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+      nodePort: 30390

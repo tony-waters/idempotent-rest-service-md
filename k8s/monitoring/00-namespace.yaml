@@ -1,0 +1,7 @@
+# The monitoring stack lives in its own namespace, separate from the `kafka` namespace holding
+# every application/Kafka resource — unlike those, Prometheus/Grafana aren't part of the outbox
+# pattern itself, so there's no reason to share Strimzi's watch namespace (see #16).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring

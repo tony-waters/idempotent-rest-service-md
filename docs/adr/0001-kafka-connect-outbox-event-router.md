@@ -1,0 +1,3 @@
+# Use Kafka Connect + Debezium Outbox Event Router SMT, not Debezium Server
+
+We need Debezium to relay `Outbox` rows to Kafka. Debezium Server would stream raw CDC row-change events directly, requiring `email-service` (or a custom transform) to unwrap the outbox payload itself. Instead we run Kafka Connect with the Debezium Postgres connector and the built-in Outbox Event Router SMT, which unwraps each row into a clean Kafka message (topic from `aggregatetype`, key from `aggregateid`, value the `payload` column) before it reaches any consumer. This costs an extra container (Kafka Connect) but produces the textbook, most recognizable shape of the transactional outbox pattern and keeps `email-service` free of outbox-schema knowledge.

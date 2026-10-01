@@ -1,0 +1,5 @@
+# Block on the rate limiter instead of reject/retry or dead-lettering
+
+`email-service`'s Kafka consumer can receive `OrderCreated` events faster than the resilience4j RateLimiter (5 req/10s) allows sends. We chose to block the consumer thread on the limiter's blocking `acquirePermission` rather than doing a non-blocking check with reject-and-retry or dead-lettering on rejection. Every message is still processed, just delayed — consumer lag growing under load is the expected, intended visualization of the rate limit, not message loss. This avoids adding DLQ/retry-topic plumbing that would be a distinct lesson (consumer resiliency) from the one this prototype demonstrates (the outbox pattern + CDC + throttling).
+
+Originally implemented as a hand-built `RateLimiter` in `ConfirmationService`. It's now declared via the `@RateLimiter` annotation, with the limiter's config (including the long stand-in timeout) moved to `application.yml` under `resilience4j.ratelimiter.instances.emailSender`. Mechanism only — this decision to block rather than reject/retry/dead-letter is unchanged.

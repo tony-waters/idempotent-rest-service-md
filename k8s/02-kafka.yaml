@@ -1,0 +1,63 @@
+# 3-broker Strimzi-managed Kafka cluster (KRaft, dual-role broker+controller nodes), replication
+# factor 3, min.insync.replicas 2, one broker per Kind worker node via anti-affinity (see #8,
+# docs/adr/0003).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: dual-role
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: outbox
+spec:
+  replicas: 3
+  roles:
+    - controller
+    - broker
+  storage:
+    type: jbod
+    volumes:
+      - id: 0
+        type: persistent-claim
+        size: 10Gi
+        kraftMetadata: shared
+  template:
+    pod:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  strimzi.io/cluster: outbox
+                  strimzi.io/pool-name: dual-role
+              topologyKey: kubernetes.io/hostname
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: outbox
+  namespace: kafka
+spec:
+  kafka:
+    version: 4.3.1
+    metadataVersion: 4.3-IV0
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      offsets.topic.replication.factor: 3
+      transaction.state.log.replication.factor: 3
+      transaction.state.log.min.isr: 2
+      default.replication.factor: 3
+      min.insync.replicas: 2
+    # Exposes broker metrics on the tcp-prometheus port (9404); Strimzi opens this port to
+    # ingress from any namespace by default, so no extra NetworkPolicy is needed for Prometheus
+    # in the monitoring namespace to scrape it (see #16).
+    metricsConfig:
+      type: strimziMetricsReporter
+  # Deploys Strimzi's bundled kafka_exporter sidecar for consumer-group lag metrics
+  # (kafka_consumergroup_lag etc.) — brokers alone don't expose this (see #16).
+  kafkaExporter:
+    topicRegex: ".*"
+    groupRegex: ".*"

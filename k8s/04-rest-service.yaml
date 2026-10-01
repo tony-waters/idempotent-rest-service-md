@@ -1,0 +1,83 @@
+# rest-service on Kind: 2 replicas, anti-affinity, PDB, health probes, DB creds from the shared
+# Secret, reachable via NodePort (see #10).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rest-service
+  namespace: kafka
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: rest-service
+  template:
+    metadata:
+      labels:
+        app: rest-service
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: rest-service
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: rest-service
+          image: local/rest-service:latest
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:postgresql://postgres:5432/outbox
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_USER
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: POSTGRES_PASSWORD
+            - name: MANAGEMENT_OTLP_TRACING_ENDPOINT
+              value: http://tempo.monitoring.svc:4318/v1/traces
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rest-service
+  namespace: kafka
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: rest-service
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rest-service
+  namespace: kafka
+spec:
+  type: NodePort
+  selector:
+    app: rest-service
+  ports:
+    - port: 8081
+      targetPort: 8081
+      nodePort: 30081

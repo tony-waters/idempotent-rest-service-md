@@ -1,0 +1,6 @@
+# Everything for this single-environment Kind deployment lives in one namespace, matching the
+# Strimzi operator's watch namespace (see docs/adr/0003).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kafka

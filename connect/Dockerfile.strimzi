@@ -1,0 +1,11 @@
+# Strimzi's KafkaConnect image ships bare Kafka Connect with no connector plugins; this adds
+# the Debezium Postgres connector (+ Outbox Event Router SMT, bundled in the same jar set) so
+# the Kind/Strimzi KafkaConnector resource (see k8s/03-kafka-connect.yaml) can run the outbox
+# connector declaratively (see #4, #12, docs/adr/0001).
+#
+# Built locally and loaded into Kind with `kind load docker-image` — no image registry needed
+# for this single-environment setup (see #7's k8s/ manifest-layout decision).
+FROM quay.io/strimzi/kafka:1.2.0-kafka-4.3.1
+USER root:root
+COPY --from=debezium/connect:3.0.0.Final /kafka/connect/debezium-connector-postgres /opt/kafka/plugins/debezium-connector-postgres
+USER 1001

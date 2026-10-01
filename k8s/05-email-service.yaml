@@ -1,0 +1,79 @@
+# email-service on Kind: 2 replicas, anti-affinity, PDB, health probes, Kafka consumer against
+# the Strimzi-managed brokers, reachable via NodePort (see #11).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: email-service
+  namespace: kafka
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: email-service
+  template:
+    metadata:
+      labels:
+        app: email-service
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: email-service
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: email-service
+          image: local/email-service:latest
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8082
+          env:
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: outbox-kafka-bootstrap:9092
+            - name: MANAGEMENT_OTLP_TRACING_ENDPOINT
+              value: http://tempo.monitoring.svc:4318/v1/traces
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8082
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: email-service
+  namespace: kafka
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: email-service
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: email-service
+  namespace: kafka
+spec:
+  type: NodePort
+  # emails.sent is an in-process counter, not aggregated across replicas: with the default
+  # Cluster traffic policy a poll can land on either pod and read a stale/zero count from
+  # whichever replica isn't the active Kafka consumer for the (single-partition) topic. Local
+  # pins each node's NodePort to its own local pod so a client that targets the node actually
+  # running the consuming replica gets a consistent, correct counter (see #14).
+  externalTrafficPolicy: Local
+  selector:
+    app: email-service
+  ports:
+    - port: 8082
+      targetPort: 8082
+      nodePort: 30082

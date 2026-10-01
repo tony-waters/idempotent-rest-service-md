@@ -1,0 +1,109 @@
+# Debezium CDC via Strimzi KafkaConnect + KafkaConnector, replacing compose's one-shot
+# connector-registrar job with a declarative resource (see #12, docs/adr/0001, docs/adr/0003).
+# Single Connect instance — no warm standby until Postgres HA exists (docs/adr/0004).
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnect
+metadata:
+  name: outbox-connect
+  namespace: kafka
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  version: 4.3.1
+  replicas: 1
+  image: local/strimzi-connect-debezium:1.2.0
+  bootstrapServers: outbox-kafka-bootstrap:9092
+  groupId: outbox-connect
+  configStorageTopic: connect-configs
+  offsetStorageTopic: connect-offsets
+  statusStorageTopic: connect-statuses
+  # Exposes Connect metrics on the tcp-prometheus port (9404), opened to all namespaces by
+  # default by Strimzi — same as the Kafka brokers (see #16).
+  metricsConfig:
+    type: strimziMetricsReporter
+  config:
+    config.storage.replication.factor: 3
+    offset.storage.replication.factor: 3
+    status.storage.replication.factor: 3
+    # Lets connector configs pull values out of env vars (populated below from the Secret)
+    # instead of hardcoding them, so the Postgres credential has one source of truth.
+    config.providers: env
+    config.providers.env.class: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+  template:
+    connectContainer:
+      env:
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-credentials
+              key: POSTGRES_PASSWORD
+---
+# Strimzi's auto-generated NetworkPolicy on the Connect pod only admits ingress from Connect's
+# own pods and the cluster operator (port 8083), which blocks kafka-ui's connector-status calls.
+# NetworkPolicies selecting the same pod are additive, so this only adds an allowance rather
+# than replacing Strimzi's managed policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kafka-ui-to-connect
+  namespace: kafka
+spec:
+  podSelector:
+    matchLabels:
+      strimzi.io/cluster: outbox-connect
+      strimzi.io/kind: KafkaConnect
+      strimzi.io/name: outbox-connect-connect
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kafka-ui
+      ports:
+        - port: 8083
+          protocol: TCP
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaConnector
+metadata:
+  name: outbox-connector
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: outbox-connect
+spec:
+  class: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  config:
+    database.hostname: postgres
+    database.port: "5432"
+    database.user: "${env:POSTGRES_USER}"
+    database.password: "${env:POSTGRES_PASSWORD}"
+    database.dbname: outbox
+    topic.prefix: rest-service
+    schema.include.list: public
+    table.include.list: public.outbox
+    plugin.name: pgoutput
+    slot.name: outbox_slot
+    publication.autocreate.mode: filtered
+    tombstones.on.delete: "false"
+    key.converter: org.apache.kafka.connect.storage.StringConverter
+    value.converter: org.apache.kafka.connect.storage.StringConverter
+    transforms: outbox
+    transforms.outbox.type: io.debezium.transforms.outbox.EventRouter
+    transforms.outbox.route.by.field: aggregatetype
+    transforms.outbox.table.field.event.id: id
+    transforms.outbox.table.field.event.key: aggregateid
+    transforms.outbox.table.field.event.type: type
+    transforms.outbox.table.field.event.payload: payload
+    transforms.outbox.route.topic.regex: "(?<routedByValue>.*)"
+    transforms.outbox.route.topic.replacement: "outbox.event.${routedByValue}"
+    # Carries the outbox row's trace_context column onto the routed message as a Kafka header
+    # named "traceparent" (W3C format), so email-service can continue rest-service's trace
+    # across the CDC hop instead of starting a new one (see ADR 0005, #17).
+    transforms.outbox.table.fields.additional.placement: "trace_context:header:traceparent"

@@ -1,0 +1,5 @@
+# Use Strimzi to run multi-broker Kafka on Kind, not hand-rolled StatefulSets
+
+Moving off docker-compose's single-broker Kafka is meant to make broker/node loss a meaningful failure mode to test later, which requires a genuine multi-broker cluster (3 brokers, replication factor 3, `min.insync.replicas` 2) spread across Kind worker nodes with anti-affinity. Rather than hand-write a StatefulSet reproducing KRaft's controller-quorum wiring, rolling-restart behavior, and broker-replacement logic ourselves, we run the Strimzi operator: a `Kafka` custom resource declares the broker/controller topology, and a `KafkaConnect` + `KafkaConnector` resource runs Debezium, with Strimzi generating and managing the underlying StatefulSets. This also retires the compose setup's one-shot curl-based `connector-registrar` job in favor of a declarative `KafkaConnector` resource.
+
+**Consequences**: Strimzi's CRDs and controller become a new cluster dependency, and anyone extending the Kafka topology needs to learn Strimzi's CRD surface (`Kafka`, `KafkaConnect`, `KafkaConnector`) rather than raw StatefulSet/Service YAML.
