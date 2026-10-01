@@ -1,19 +1,21 @@
-# End-to-end load + verify test
+# k6 scripts
 
-`outbox-load-test.js` drives the full running stack — `rest-service` → outbox table → Debezium
-CDC → Kafka → `email-service`'s rate-limited consumer — through its public HTTP surface only,
-and asserts the pattern actually works end-to-end, including that the downstream rate limiter
-visibly throttles delivery.
-
-It is **not** part of the Kind cluster's own manifests; run it manually with the k6 CLI against
-an already-running cluster.
+Both scripts here drive the running stack through its public HTTP surface only, and are **not**
+part of the Kind cluster's own manifests — run them manually with the k6 CLI against an
+already-running cluster.
 
 ## Prerequisites
 
 - [k6](https://k6.io/docs/get-started/installation/) installed locally.
 - The Kind cluster up and healthy: `./up.sh` from the repo root (see the top-level README).
 
-## Run it
+## Outbox end-to-end load + verify test
+
+`outbox-load-test.js` drives the full stack — `rest-service` → outbox table → Debezium
+CDC → Kafka → `email-service`'s rate-limited consumer — and asserts the pattern actually works
+end-to-end, including that the downstream rate limiter visibly throttles delivery.
+
+### Run it
 
 `rest-service` and `email-service` are reachable via Kind's NodePorts, and `PROMETHEUS_URL`
 is required to get a reliable read on `emails.sent` (see "Why `PROMETHEUS_URL`" below):
@@ -43,7 +45,7 @@ before running it again. That wipes the whole Kind cluster, Postgres data includ
 no risk of stale `outbox` rows causing Debezium to re-emit a backlog on top of what's already
 there (unlike a partial reset that leaves the data volume in place).
 
-## Why `PROMETHEUS_URL`
+### Why `PROMETHEUS_URL`
 
 `email-service` runs 2 replicas behind a single-partition topic, so only one replica's JVM ever
 holds a non-zero `emails.sent` counter — polling `EMAIL_SERVICE_URL` directly (a load-balanced
@@ -59,7 +61,7 @@ Service uses `externalTrafficPolicy: Local`, so a node without one doesn't fail 
 connection just hangs until it times out. Check which nodes have a pod first (`kubectl get pods
 -n kafka -o wide -l app=email-service`) if you need to fall back to this.
 
-## Configuration
+### Configuration
 
 All parameters are overridable via environment variables (`k6 run -e NAME=value ...`):
 
@@ -76,7 +78,7 @@ All parameters are overridable via environment variables (`k6 run -e NAME=value 
 | `POLL_TIMEOUT_SECONDS` | `90` | Max time to wait for `emails.sent` to reach the target |
 | `MIN_DURATION_SAFETY_FACTOR` | `0.6` | Fraction of the theoretical minimum throttled duration required to pass — see comment in the script |
 
-## Verifying the test actually exercises throttling
+### Verifying the test actually exercises throttling
 
 To confirm the timing assertion is meaningful rather than a tautology, temporarily raise
 `email-service`'s rate limiter (e.g. bump `limitForPeriod` from `5` to something large like
@@ -94,3 +96,57 @@ up a rebuilt image — the explicit `rollout restart` is what forces the pods to
 it.) Re-run the script — the final `check` (`delivery took at least as long as the rate limiter
 mandates`) should now fail, since delivery will complete almost immediately instead of over
 several rate-limit windows. Revert the change and repeat the rebuild/redeploy afterwards.
+
+## Idempotency-Key demonstration
+
+`idempotency-load-test.js` demonstrates the `Idempotency-Key` mechanism on `POST /orders` (ADR
+0006; `IdempotencyAspect` + `IdempotencyStore`) through `rest-service`'s HTTP surface only — no
+direct assertions against Redis or Postgres.
+
+It runs two scenarios, in order:
+
+1. **`idempotency_demo`** (one VU, sequential): a fresh key creates an order (`201`); replaying
+   the same key with the same body returns the *same* order id instead of a new one; reusing the
+   key with a different body is rejected (`409 Conflict`); a request with no `Idempotency-Key`
+   header at all is rejected (`400 Bad Request`).
+2. **`concurrent_lock_demo`** (`CONCURRENT_VUS` VUs, started once the first scenario is done, all
+   racing one pre-shared brand-new key at effectively the same instant): exactly one request wins
+   the lock and gets `201`, every other concurrent request is rejected with `425 Too Early` — this
+   is what proves the lock itself, not just the sequential happy path above.
+
+### Run the idempotency script
+
+```sh
+NODE_IP=$(docker inspect outbox-worker --format '{{.NetworkSettings.Networks.kind.IPAddress}}')
+k6 run -e REST_SERVICE_URL=http://$NODE_IP:30081 k6/idempotency-load-test.js
+```
+
+Or against a locally-running `rest-service` (e.g. via your IDE or `mvn spring-boot:run`), the
+default `REST_SERVICE_URL` of `http://localhost:8081` needs no override:
+
+```sh
+k6 run k6/idempotency-load-test.js
+```
+
+A passing run means: replays dedupe instead of duplicating, conflicting reuse and missing-header
+requests are both rejected correctly, and concurrent requests racing the same key really do
+serialize through the Redis lock rather than all succeeding independently.
+
+### How the concurrent scenario gets a deterministic result
+
+k6 VUs don't share JavaScript state, so "exactly one 201, the rest 425" isn't asserted by having
+VUs compare notes — it's asserted with two custom `Counter` metrics
+(`idempotency_concurrent_acquired`, `idempotency_concurrent_rejected`) that k6 aggregates across
+every VU regardless of which one incremented them, checked via `thresholds` in the script's
+`options`. The shared key itself comes from `setup()`, which runs once before any scenario starts,
+so every VU in `concurrent_lock_demo` races the *same* key rather than each minting its own.
+
+### Idempotency script configuration
+
+All parameters are overridable via environment variables (`k6 run -e NAME=value ...`):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `REST_SERVICE_URL` | `http://localhost:8081` | Base URL of `rest-service` |
+| `CONCURRENT_VUS` | `5` | Number of VUs that simultaneously race the same brand-new key in `concurrent_lock_demo` |
+| `CONCURRENT_START_OFFSET_SECONDS` | `5` | Delay before `concurrent_lock_demo` starts, giving `idempotency_demo` time to finish first |
