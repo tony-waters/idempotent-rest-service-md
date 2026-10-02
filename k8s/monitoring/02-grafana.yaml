@@ -3,7 +3,13 @@
 # Deployment/Service shape, retargeted at `monitoring`, exposed via NodePort like every other
 # service in this repo, with the Prometheus/Tempo datasources and the custom dashboard below
 # auto-provisioned from files so there's no manual "click through the UI" setup step (see #16,
-# #17 for the Tempo datasource).
+# #17 for the Tempo datasource). The Grafana Deployment also mounts a second dashboard ConfigMap
+# defined in 04-idempotency-dashboard.yaml — kept there since it's a separate concern, but wired
+# in here because this is the one place the Deployment itself is defined (see that file's header
+# comment for why it isn't split further into its own partial Deployment patch). The two
+# ConfigMaps are merged into one directory via a projected volume rather than mounting the
+# second one with subPath — subPath-ing a file into a directory that's itself a ConfigMap mount
+# hits a kubelet bug (mount ... not a directory) on pod creation.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -171,9 +177,16 @@ spec:
         - name: dashboard-provisioning
           configMap:
             name: grafana-dashboard-provisioning
+        # Merges both dashboard ConfigMaps into the single flat directory the file-based
+        # provider scans (it has no foldersFromFilesStructure, so a subdirectory per ConfigMap
+        # wouldn't be picked up) — their keys don't collide, so a projected volume is enough.
         - name: dashboards
-          configMap:
-            name: grafana-dashboard-outbox
+          projected:
+            sources:
+              - configMap:
+                  name: grafana-dashboard-outbox
+              - configMap:
+                  name: grafana-dashboard-idempotency
 ---
 apiVersion: v1
 kind: Service

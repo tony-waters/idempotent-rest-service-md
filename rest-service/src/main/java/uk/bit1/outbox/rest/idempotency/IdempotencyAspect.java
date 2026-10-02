@@ -1,5 +1,6 @@
 package uk.bit1.outbox.rest.idempotency;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
@@ -26,7 +27,13 @@ import java.util.UUID;
 // or replayed invocation under the same client-supplied key. Runs outside (around) @Transactional
 // so the lock covers the whole business operation and a rollback is visible before the lock is
 // released — see the explicit @Order below. The Redis lock protocol itself lives in
-// IdempotencyStore; this class only does AOP/reflection plumbing and maps outcomes to HTTP.
+// IdempotencyStore; this class only does AOP/reflection plumbing, maps outcomes to HTTP, and
+// records each terminal outcome (created/replayed/conflict/in_progress) as idempotency.outcomes
+// for the Grafana dashboard in k8s/monitoring/04-idempotency-dashboard.yaml. Each outcome is only
+// recorded once its branch has actually succeeded — "created" after the business method and
+// store.complete() both return (a thrown exception just frees the lock for a clean retry, see
+// proceedAndRecord), "replayed" after replay() has actually re-fetched the original result — so a
+// downstream failure in either path isn't miscounted as a settled outcome.
 @Aspect
 @Component
 @Order(0)
@@ -35,11 +42,13 @@ class IdempotencyAspect {
     private final IdempotencyStore store;
     private final ObjectMapper objectMapper;
     private final Repositories repositories;
+    private final MeterRegistry meterRegistry;
 
-    IdempotencyAspect(IdempotencyStore store, ObjectMapper objectMapper, ApplicationContext applicationContext) {
+    IdempotencyAspect(IdempotencyStore store, ObjectMapper objectMapper, ApplicationContext applicationContext, MeterRegistry meterRegistry) {
         this.store = store;
         this.objectMapper = objectMapper;
         this.repositories = new Repositories(applicationContext);
+        this.meterRegistry = meterRegistry;
     }
 
     @Around("@annotation(Idempotent)")
@@ -53,11 +62,19 @@ class IdempotencyAspect {
         LockResult result = store.tryBegin(scope, idempotencyKey, fingerprint);
         return switch (result) {
             case LockResult.Acquired() -> proceedAndRecord(joinPoint, scope, idempotencyKey, fingerprint);
-            case LockResult.InProgress() ->
-                    throw new ResponseStatusException(HttpStatus.TOO_EARLY, "A request with this Idempotency-Key is already in progress");
-            case LockResult.Conflict() ->
-                    throw new ResponseStatusException(HttpStatus.CONFLICT, "Idempotency-Key was already used with a different request body");
-            case LockResult.Replayable(UUID resultId) -> replay(method.getReturnType(), resultId);
+            case LockResult.InProgress() -> {
+                recordOutcome("in_progress", scope);
+                throw new ResponseStatusException(HttpStatus.TOO_EARLY, "A request with this Idempotency-Key is already in progress");
+            }
+            case LockResult.Conflict() -> {
+                recordOutcome("conflict", scope);
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Idempotency-Key was already used with a different request body");
+            }
+            case LockResult.Replayable(UUID resultId) -> {
+                Object replayed = replay(method.getReturnType(), resultId);
+                recordOutcome("replayed", scope);
+                yield replayed;
+            }
         };
     }
 
@@ -70,7 +87,12 @@ class IdempotencyAspect {
             throw t;
         }
         store.complete(scope, key, fingerprint, extractId(result));
+        recordOutcome("created", scope);
         return result;
+    }
+
+    private void recordOutcome(String outcome, String scope) {
+        meterRegistry.counter("idempotency.outcomes", "outcome", outcome, "scope", scope).increment();
     }
 
     @SuppressWarnings("unchecked")

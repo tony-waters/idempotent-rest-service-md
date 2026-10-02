@@ -1,6 +1,7 @@
 package uk.bit1.outbox.rest.order;
 
 import com.redis.testcontainers.RedisContainer;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.TestRestTemplate;
@@ -28,6 +29,10 @@ import static org.assertj.core.api.Assertions.within;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class IdempotencyApiTest {
 
+    // Matches IdempotencyAspect's `method.getDeclaringClass().getName() + "." + method.getName()`
+    // for OrderService.createOrder, the only @Idempotent method today.
+    private static final String SCOPE = "uk.bit1.outbox.rest.order.OrderService.createOrder";
+
     @Container
     @ServiceConnection
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16");
@@ -39,12 +44,20 @@ class IdempotencyApiTest {
     @Autowired
     private TestRestTemplate restTemplate;
 
+    @Autowired
+    private MeterRegistry meterRegistry;
+
     private static HttpEntity<CreateOrderRequest> withKey(CreateOrderRequest request, String key) {
         HttpHeaders headers = new HttpHeaders();
         if (key != null) {
             headers.set("Idempotency-Key", key);
         }
         return new HttpEntity<>(request, headers);
+    }
+
+    private double outcomeCount(String outcome) {
+        var counter = meterRegistry.find("idempotency.outcomes").tag("outcome", outcome).tag("scope", SCOPE).counter();
+        return counter == null ? 0.0 : counter.count();
     }
 
     @Test
@@ -60,15 +73,19 @@ class IdempotencyApiTest {
     void replayingTheSameKeyAndBodyReturnsTheOriginalOrderWithoutCreatingADuplicate() {
         String key = UUID.randomUUID().toString();
         CreateOrderRequest request = new CreateOrderRequest("customer@example.com", new BigDecimal("19.99"));
+        double createdBaseline = outcomeCount("created");
+        double replayedBaseline = outcomeCount("replayed");
 
         ResponseEntity<OrderResponse> first = restTemplate.postForEntity("/orders", withKey(request, key), OrderResponse.class);
         assertThat(first.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         OrderResponse firstOrder = first.getBody();
         assertThat(firstOrder).isNotNull();
+        assertThat(outcomeCount("created")).isEqualTo(createdBaseline + 1);
 
         ResponseEntity<OrderResponse> second = restTemplate.postForEntity("/orders", withKey(request, key), OrderResponse.class);
 
         assertThat(second.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(outcomeCount("replayed")).isEqualTo(replayedBaseline + 1);
         OrderResponse replayedOrder = second.getBody();
         assertThat(replayedOrder).isNotNull();
         assertThat(replayedOrder.id()).isEqualTo(firstOrder.id());
@@ -89,6 +106,7 @@ class IdempotencyApiTest {
         String key = UUID.randomUUID().toString();
         CreateOrderRequest original = new CreateOrderRequest("customer@example.com", new BigDecimal("19.99"));
         CreateOrderRequest changed = new CreateOrderRequest("customer@example.com", new BigDecimal("25.00"));
+        double conflictBaseline = outcomeCount("conflict");
 
         ResponseEntity<OrderResponse> first = restTemplate.postForEntity("/orders", withKey(original, key), OrderResponse.class);
         assertThat(first.getStatusCode()).isEqualTo(HttpStatus.CREATED);
@@ -96,5 +114,6 @@ class IdempotencyApiTest {
         ResponseEntity<String> second = restTemplate.postForEntity("/orders", withKey(changed, key), String.class);
 
         assertThat(second.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(outcomeCount("conflict")).isEqualTo(conflictBaseline + 1);
     }
 }

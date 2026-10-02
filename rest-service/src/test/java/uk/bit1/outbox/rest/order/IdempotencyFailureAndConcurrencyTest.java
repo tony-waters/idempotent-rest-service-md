@@ -1,6 +1,7 @@
 package uk.bit1.outbox.rest.order;
 
 import com.redis.testcontainers.RedisContainer;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.TestRestTemplate;
@@ -37,6 +38,10 @@ import static org.mockito.Mockito.when;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class IdempotencyFailureAndConcurrencyTest {
 
+    // Matches IdempotencyAspect's `method.getDeclaringClass().getName() + "." + method.getName()`
+    // for OrderService.createOrder, the only @Idempotent method today.
+    private static final String SCOPE = "uk.bit1.outbox.rest.order.OrderService.createOrder";
+
     @Container
     @ServiceConnection
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16");
@@ -54,10 +59,18 @@ class IdempotencyFailureAndConcurrencyTest {
     @Autowired
     private OrderRepository orderRepository;
 
+    @Autowired
+    private MeterRegistry meterRegistry;
+
     private static HttpEntity<CreateOrderRequest> withKey(CreateOrderRequest request, String key) {
         HttpHeaders headers = new HttpHeaders();
         headers.set("Idempotency-Key", key);
         return new HttpEntity<>(request, headers);
+    }
+
+    private double outcomeCount(String outcome) {
+        var counter = meterRegistry.find("idempotency.outcomes").tag("outcome", outcome).tag("scope", SCOPE).counter();
+        return counter == null ? 0.0 : counter.count();
     }
 
     @Test
@@ -68,15 +81,18 @@ class IdempotencyFailureAndConcurrencyTest {
         String key = UUID.randomUUID().toString();
         CreateOrderRequest request = new CreateOrderRequest("retry@example.com", new BigDecimal("12.00"));
         long baseline = orderRepository.count();
+        double createdBaseline = outcomeCount("created");
 
         ResponseEntity<String> failedAttempt = restTemplate.postForEntity("/orders", withKey(request, key), String.class);
         assertThat(failedAttempt.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         assertThat(orderRepository.count()).isEqualTo(baseline);
+        assertThat(outcomeCount("created")).isEqualTo(createdBaseline);
 
         ResponseEntity<OrderResponse> retry = restTemplate.postForEntity("/orders", withKey(request, key), OrderResponse.class);
 
         assertThat(retry.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(orderRepository.count()).isEqualTo(baseline + 1);
+        assertThat(outcomeCount("created")).isEqualTo(createdBaseline + 1);
     }
 
     @Test
@@ -93,6 +109,8 @@ class IdempotencyFailureAndConcurrencyTest {
         String key = UUID.randomUUID().toString();
         CreateOrderRequest request = new CreateOrderRequest("concurrent@example.com", new BigDecimal("8.00"));
         ExecutorService executor = Executors.newSingleThreadExecutor();
+        double createdBaseline = outcomeCount("created");
+        double inProgressBaseline = outcomeCount("in_progress");
 
         try {
             Future<ResponseEntity<OrderResponse>> firstCall = executor.submit(
@@ -101,10 +119,12 @@ class IdempotencyFailureAndConcurrencyTest {
 
             ResponseEntity<String> secondCall = restTemplate.postForEntity("/orders", withKey(request, key), String.class);
             assertThat(secondCall.getStatusCode().value()).isEqualTo(425);
+            assertThat(outcomeCount("in_progress")).isEqualTo(inProgressBaseline + 1);
 
             releaseFirstRequest.countDown();
             ResponseEntity<OrderResponse> firstResult = firstCall.get(5, TimeUnit.SECONDS);
             assertThat(firstResult.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+            assertThat(outcomeCount("created")).isEqualTo(createdBaseline + 1);
         } finally {
             executor.shutdown();
         }

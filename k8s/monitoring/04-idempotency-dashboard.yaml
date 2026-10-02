@@ -1,0 +1,68 @@
+# A second Grafana dashboard, provisioned the same way as 02-grafana.yaml's "Outbox Pattern in
+# Action" one — same file-based provider (grafana-dashboard-provisioning there), so the
+# provisioning config itself needs no changes. That provider has no foldersFromFilesStructure,
+# so it only scans the TOP LEVEL of its configured directory (no recursion into subdirectories):
+# 02-grafana.yaml's Deployment merges this ConfigMap into that same flat directory via a
+# projected volume (alongside grafana-dashboard-outbox) rather than a subdirectory, specifically
+# to satisfy that. Visualizes
+# @Idempotent/IdempotencyAspect (ADR 0006) via the idempotency.outcomes counter it emits, not via
+# Spring's http_server_requests_seconds, since a plain HTTP status can't tell a genuine create
+# apart from a replay (both return 201 — see IdempotencyAspect's comment).
+#
+# Populate it by rerunning k6/idempotency-load-test.js against the running cluster (see that
+# file and README.md) — this dashboard has no traffic generator of its own.
+#
+# The Grafana Deployment itself (volumeMounts/volumes wiring this ConfigMap in) stays defined
+# only in 02-grafana.yaml rather than being split across files — a second, partial Deployment
+# manifest here would depend on kubectl apply's three-way-merge semantics to not clobber fields
+# (like the immutable spec.selector) that this file doesn't mention.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-idempotency
+  namespace: monitoring
+data:
+  idempotency-in-action.json: |
+    {
+      "title": "Idempotency in Action",
+      "uid": "idempotency-in-action",
+      "schemaVersion": 39,
+      "editable": true,
+      "refresh": "10s",
+      "time": { "from": "now-15m", "to": "now" },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Idempotency outcomes over time",
+          "description": "Rate of each terminal @Idempotent outcome on POST /orders: created (lock acquired and the order was actually created), replayed (same key + body, original order returned), conflict (same key, different body, rejected 409), in_progress (another request already holds the lock, rejected 425). Does NOT include the 400 returned for a missing Idempotency-Key header — that's a precondition failure, not an idempotency outcome, so it's not part of this counter.",
+          "type": "timeseries",
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(rate(idempotency_outcomes_total[1m])) by (outcome)",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Concurrent lock contention (race)",
+          "description": "Counts, not rates: a race (e.g. k6's concurrent_lock_demo scenario) is a short burst, not a continuous signal. Fixed to the last 5 minutes regardless of the dashboard's time range above, so widening that range to look at history doesn't blank this panel out.",
+          "type": "bargauge",
+          "gridPos": { "h": 9, "w": 24, "x": 0, "y": 9 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "timeFrom": "5m",
+          "targets": [
+            {
+              "datasource": { "type": "prometheus", "uid": "prometheus" },
+              "expr": "sum(increase(idempotency_outcomes_total[$__range])) by (outcome)",
+              "legendFormat": "{{outcome}}",
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    }
