@@ -1,0 +1,561 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>Outbox Relay (Copy)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #eef1f4;
+    --surface: #ffffff;
+    --surface-2: #e2e8ed;
+    --ink: #1a2230;
+    --ink-muted: #5c6b7a;
+    --line: #c7d0d9;
+    --line-soft: #dbe1e7;
+    --accent: #0f7a6c;
+    --accent-warm: #a8502b;
+    --accent-trace: #6a4fb3;
+    --mono-dim: #8a97a3;
+
+    --font-display: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11161c;
+      --surface: #1a212b;
+      --surface-2: #212b37;
+      --ink: #e8ecf0;
+      --ink-muted: #9aa7b4;
+      --line: #334152;
+      --line-soft: #2a3542;
+      --accent: #2bbfa8;
+      --accent-warm: #e2834f;
+      --accent-trace: #9c87db;
+      --mono-dim: #6b7682;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #11161c;
+    --surface: #1a212b;
+    --surface-2: #212b37;
+    --ink: #e8ecf0;
+    --ink-muted: #9aa7b4;
+    --line: #334152;
+    --line-soft: #2a3542;
+    --accent: #2bbfa8;
+    --accent-warm: #e2834f;
+    --accent-trace: #9c87db;
+    --mono-dim: #6b7682;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-display);
+    margin: 0;
+    padding: 48px 32px 80px;
+    line-height: 1.55;
+  }
+
+  .page {
+    max-width: 1240px;
+    margin: 0 auto;
+  }
+
+  .prose {
+    max-width: 700px;
+  }
+
+  header.masthead {
+    margin-bottom: 36px;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-size: clamp(32px, 4vw, 44px);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    margin: 0 0 10px;
+    text-wrap: balance;
+  }
+
+  .subtitle {
+    font-size: 17px;
+    color: var(--ink-muted);
+    margin: 0;
+    max-width: 640px;
+    text-wrap: balance;
+  }
+
+  p { font-size: 15.5px; color: var(--ink); }
+  p.lede { font-size: 16.5px; }
+
+  .figure-block {
+    margin: 56px 0 44px;
+  }
+
+  h2.figure-title {
+    font-size: 21px;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+
+  .figure-kicker {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-muted);
+    margin: 0 0 20px;
+  }
+
+  .diagram-scroll {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--line-soft);
+    border-radius: 14px;
+    padding: 20px 10px;
+  }
+
+  .diagram-scroll.compact {
+    max-width: 920px;
+  }
+
+  svg.diagram {
+    display: block;
+    height: auto;
+  }
+
+  svg.diagram.wide { width: 1440px; max-width: none; }
+  svg.diagram.narrow { width: 1000px; max-width: none; }
+
+  figcaption {
+    margin-top: 14px;
+    font-size: 14px;
+    color: var(--ink-muted);
+    max-width: 760px;
+  }
+
+  ul.notes {
+    list-style: none;
+    margin: 20px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 14px;
+  }
+
+  ul.notes li {
+    position: relative;
+    padding-left: 20px;
+    font-size: 15px;
+    color: var(--ink);
+  }
+
+  ul.notes li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    background: var(--surface-2);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  .legend {
+    display: flex;
+    gap: 22px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-muted);
+  }
+
+  .legend span.swatch {
+    display: inline-block;
+    width: 22px;
+    border-top: 2px dashed var(--mono-dim);
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .legend .trace .swatch { border-top-color: var(--accent-trace); }
+  .legend .api .swatch { border-top: 2px solid var(--mono-dim); }
+  .legend .flow .swatch { border-top: 2px solid var(--accent); }
+  .legend .control .swatch { border-top: 2px solid var(--accent-warm); }
+
+  footer.colophon {
+    margin-top: 64px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line-soft);
+    font-size: 13px;
+    color: var(--ink-muted);
+  }
+</style>
+
+<div class="page">
+
+  <header class="masthead prose">
+    <p class="eyebrow">architecture · transactional outbox</p>
+    <h1>Outbox Relay</h1>
+    <p class="subtitle">How <code>rest-service</code>, Postgres, Kafka Connect, Kafka, and <code>email-service</code> hand an order off to a confirmation email &mdash; without ever calling each other directly.</p>
+  </header>
+
+  <div class="prose">
+    <p class="lede">An order is created by one HTTP request to <code>rest-service</code> and confirmed by an email sent from an entirely different process, <code>email-service</code>, minutes or seconds later. The two never open a connection to each other. <code>rest-service</code> writes to Postgres; Debezium tails Postgres's write-ahead log and republishes to Kafka; <code>email-service</code> only ever talks to Kafka. Postgres and Kafka are the whole interface between the two services.</p>
+  </div>
+
+  <section class="figure-block">
+    <h2 class="figure-title">Request &rarr; order &rarr; confirmation</h2>
+    <p class="figure-kicker">the primary path, from <code>POST /orders</code> to a sent confirmation</p>
+
+    <div class="diagram-scroll">
+      <svg class="diagram wide" viewBox="0 0 1440 400" role="img" aria-label="An HTTP client posts an order to rest-service, which checks a Redis idempotency lock and then writes the Order and an OrderCreated outbox row in one Postgres transaction. Debezium, running inside Kafka Connect, reads that write from Postgres's replication log and publishes it to a Kafka topic. email-service consumes that topic and logs a rate-limited confirmation. A W3C traceparent value travels alongside: written into the outbox row by rest-service, placed onto the Kafka record as a header by the Connect transform, and picked up again as the start of email-service's consumer span.">
+        <defs>
+          <marker id="arrowMain" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+          </marker>
+          <marker id="arrowWarm" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent-warm)"/>
+          </marker>
+          <marker id="arrowTrace" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent-trace)"/>
+          </marker>
+        </defs>
+
+        <!-- Redis -->
+        <rect x="250" y="20" width="160" height="70" rx="10" fill="var(--surface)" stroke="var(--accent-warm)" stroke-width="1.5"/>
+        <text x="330" y="46" text-anchor="middle" font-family="var(--font-display)" font-weight="700" font-size="15" fill="var(--accent-warm)">Redis</text>
+        <text x="330" y="63" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">idempotency:{scope}:{key}</text>
+        <text x="330" y="77" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">TTL-bound lock + result</text>
+
+        <!-- Redis <-> rest-service connector -->
+        <line x1="330" y1="90" x2="330" y2="110" stroke="var(--accent-warm)" stroke-width="1.5" marker-end="url(#arrowWarm)" marker-start="url(#arrowWarm)"/>
+        <text x="345" y="96" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent-warm)">setIfAbsent / get</text>
+        <text x="345" y="107" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">(2 attempts, then fail)</text>
+
+        <!-- trace overview label -->
+        <text x="850" y="80" text-anchor="middle" font-family="var(--font-display)" font-style="italic" font-size="11" fill="var(--accent-trace)">traceparent (W3C): outbox row &rarr; Kafka header &rarr; consumer span &nbsp;(ADR 0005)</text>
+
+        <!-- trace path -->
+        <circle cx="390" cy="110" r="4" fill="var(--accent-trace)"/>
+        <path d="M390,110 V95 H1310 V110" fill="none" stroke="var(--accent-trace)" stroke-width="1.5" stroke-dasharray="6 4"/>
+        <path d="M840,95 V116" fill="none" stroke="var(--accent-trace)" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrowTrace)"/>
+        <path d="M1310,95 V110" fill="none" stroke="var(--accent-trace)" stroke-width="1.5" marker-end="url(#arrowTrace)"/>
+
+        <!-- Client -->
+        <rect x="30" y="150" width="160" height="80" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="110" y="180" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="15" fill="var(--ink)">Client</text>
+        <text x="110" y="198" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">POST /orders</text>
+        <text x="110" y="212" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">Idempotency-Key: &lt;uuid&gt;</text>
+
+        <!-- rest-service -->
+        <rect x="230" y="110" width="200" height="160" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="330" y="134" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="15" fill="var(--ink)">rest-service</text>
+        <text x="330" y="153" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">OrderController</text>
+        <text x="330" y="169" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">OrderService.createOrder()</text>
+        <text x="330" y="188" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent-warm)">@Idempotent (AOP)</text>
+        <text x="330" y="204" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">@Transactional</text>
+
+        <!-- Postgres -->
+        <rect x="470" y="110" width="220" height="160" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="580" y="134" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="15" fill="var(--ink)">Postgres</text>
+        <text x="580" y="150" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">db: outbox</text>
+        <rect x="490" y="160" width="180" height="38" rx="6" fill="var(--surface-2)" stroke="var(--line-soft)"/>
+        <text x="580" y="183" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--ink)">orders</text>
+        <rect x="490" y="208" width="180" height="38" rx="6" fill="var(--surface-2)" stroke="var(--accent-trace)" stroke-width="1.25"/>
+        <text x="580" y="231" text-anchor="middle" font-family="var(--font-mono)" font-size="11" fill="var(--ink)">outbox</text>
+        <text x="580" y="260" text-anchor="middle" font-family="var(--font-mono)" font-style="italic" font-size="9" fill="var(--ink-muted)">+ trace_context, aggregatetype</text>
+
+        <!-- Kafka Connect -->
+        <rect x="730" y="110" width="220" height="160" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="840" y="134" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="15" fill="var(--ink)">Kafka Connect</text>
+        <text x="840" y="153" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">Debezium Postgres connector</text>
+        <text x="840" y="168" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">EventRouter transform</text>
+        <text x="840" y="190" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">route.by.field: aggregatetype</text>
+        <text x="840" y="206" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">&rarr; topic outbox.event.*</text>
+
+        <!-- Kafka -->
+        <rect x="990" y="110" width="180" height="160" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="1080" y="134" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="15" fill="var(--ink)">Kafka</text>
+        <text x="1080" y="155" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">topic:</text>
+        <text x="1080" y="172" text-anchor="middle" font-family="var(--font-mono)" font-size="10.5" fill="var(--ink)">outbox.event.order</text>
+        <text x="1080" y="194" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">key = order id</text>
+        <text x="1080" y="209" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">value = JSON payload</text>
+
+        <!-- email-service -->
+        <rect x="1210" y="110" width="200" height="160" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="1310" y="134" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="15" fill="var(--ink)">email-service</text>
+        <text x="1310" y="153" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">OrderCreatedListener</text>
+        <text x="1310" y="168" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">@KafkaListener</text>
+        <text x="1310" y="186" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">ConfirmationService.send()</text>
+        <text x="1310" y="202" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent-warm)">@RateLimiter 5 / 10s</text>
+
+        <!-- terminal -->
+        <line x1="1310" y1="270" x2="1310" y2="298" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMain)"/>
+        <rect x="1210" y="300" width="200" height="58" rx="8" fill="var(--surface-2)" stroke="var(--line-soft)"/>
+        <text x="1310" y="325" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">logs confirmation +</text>
+        <text x="1310" y="340" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--ink-muted)">emails.sent.increment()</text>
+
+        <!-- main flow arrows -->
+        <line x1="190" y1="190" x2="230" y2="190" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMain)"/>
+
+        <line x1="430" y1="190" x2="470" y2="190" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMain)"/>
+        <text x="450" y="285" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">INSERT order +</text>
+        <text x="450" y="297" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">outbox row (1 txn)</text>
+
+        <line x1="690" y1="190" x2="730" y2="190" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMain)"/>
+        <text x="710" y="285" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">CDC via replication</text>
+        <text x="710" y="297" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">slot outbox_slot (WAL)</text>
+
+        <line x1="950" y1="190" x2="990" y2="190" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMain)"/>
+        <text x="970" y="285" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">publish via</text>
+        <text x="970" y="297" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">EventRouter</text>
+
+        <line x1="1170" y1="190" x2="1210" y2="190" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMain)"/>
+        <text x="1190" y="285" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">consumer group</text>
+        <text x="1190" y="297" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">email-service</text>
+      </svg>
+    </div>
+    <figcaption>rest-service never calls email-service. It writes an Order and an OrderCreated row to Postgres in one transaction; Debezium tails Postgres's replication log for that write and republishes it as a Kafka record; email-service reacts to the Kafka record. The Redis lock (warm) and the trace context (violet) are the only things that cross that boundary outside of the data itself.</figcaption>
+
+    <div class="legend">
+      <span class="flow"><span class="swatch"></span>primary data flow &mdash; HTTP → Postgres write → CDC → Kafka → consume</span>
+      <span class="control"><span class="swatch"></span>protective control &mdash; idempotency lock, rate limiter</span>
+      <span class="trace"><span class="swatch"></span>trace propagation &mdash; W3C traceparent, outbox row → Kafka header → consumer span</span>
+    </div>
+  </section>
+
+  <div class="prose">
+    <ul class="notes">
+      <li><code>rest-service</code> and <code>email-service</code> share no network call, client, or API contract &mdash; the <code>outbox</code> table and the <code>outbox.event.order</code> topic are the entire interface between them.</li>
+      <li>The Redis lock and the Postgres write are independent failure domains: losing Redis loses deduplication of a replayed <code>Idempotency-Key</code>, not the correctness of the Order/outbox write itself.</li>
+      <li>The HTTP request's trace survives the CDC hop by riding inside the outbox row as a plain <code>trace_context</code> column, becoming a Kafka header only when Debezium's transform writes it &mdash; there is no shared request context between the two JVMs.</li>
+    </ul>
+  </div>
+
+  <section class="figure-block">
+    <h2 class="figure-title">Sequence: creating an order</h2>
+    <p class="figure-kicker">the same path as above, as a timeline &mdash; solid arrows are calls, dashed arrows are returns or the async CDC relay</p>
+
+    <div class="diagram-scroll">
+      <svg class="diagram wide" viewBox="0 0 1460 650" role="img" aria-label="Sequence diagram: the client sends POST /orders with an Idempotency-Key to rest-service, which acquires a lock in Redis, writes the Order and outbox row to Postgres in one transaction, marks the Redis key completed, and returns 201 to the client. Later, asynchronously, Kafka Connect's Debezium connector reads that write from Postgres's replication log, publishes it to Kafka with a traceparent header, and email-service consumes it and logs a rate-limited confirmation.">
+        <defs>
+          <marker id="arrowMainSeq" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+          </marker>
+          <marker id="arrowWarmSeq" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent-warm)"/>
+          </marker>
+        </defs>
+
+        <!-- lifeline heads -->
+        <g font-family="var(--font-display)" font-weight="600" font-size="13" fill="var(--ink)" text-anchor="middle">
+          <rect x="20" y="20" width="140" height="50" rx="8" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+          <text x="90" y="50">Client</text>
+
+          <rect x="235" y="20" width="140" height="50" rx="8" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+          <text x="305" y="42">rest-service</text>
+          <text x="305" y="58" font-family="var(--font-mono)" font-weight="400" font-size="9.5" fill="var(--ink-muted)">:8081</text>
+
+          <rect x="450" y="20" width="140" height="50" rx="8" fill="var(--surface)" stroke="var(--accent-warm)" stroke-width="1.5"/>
+          <text x="520" y="50" fill="var(--accent-warm)">Redis</text>
+
+          <rect x="665" y="20" width="140" height="50" rx="8" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+          <text x="735" y="42">Postgres</text>
+          <text x="735" y="58" font-family="var(--font-mono)" font-weight="400" font-size="9.5" fill="var(--ink-muted)">db: outbox</text>
+
+          <rect x="880" y="20" width="140" height="50" rx="8" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+          <text x="950" y="50">Kafka Connect</text>
+
+          <rect x="1095" y="20" width="140" height="50" rx="8" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+          <text x="1165" y="42">Kafka</text>
+          <text x="1165" y="58" font-family="var(--font-mono)" font-weight="400" font-size="9.5" fill="var(--ink-muted)">broker</text>
+
+          <rect x="1310" y="20" width="140" height="50" rx="8" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+          <text x="1380" y="42">email-service</text>
+          <text x="1380" y="58" font-family="var(--font-mono)" font-weight="400" font-size="9.5" fill="var(--ink-muted)">:8082</text>
+        </g>
+
+        <!-- lifelines -->
+        <g stroke="var(--line)" stroke-width="1" stroke-dasharray="4 4">
+          <line x1="90" y1="70" x2="90" y2="625"/>
+          <line x1="305" y1="70" x2="305" y2="625"/>
+          <line x1="520" y1="70" x2="520" y2="625"/>
+          <line x1="735" y1="70" x2="735" y2="625"/>
+          <line x1="950" y1="70" x2="950" y2="625"/>
+          <line x1="1165" y1="70" x2="1165" y2="625"/>
+          <line x1="1380" y1="70" x2="1380" y2="625"/>
+        </g>
+
+        <!-- r1: Client -> rest-service -->
+        <text x="197" y="96" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--accent)">POST /orders</text>
+        <text x="197" y="108" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--accent)">Idempotency-Key: k</text>
+        <line x1="90" y1="114" x2="305" y2="114" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMainSeq)"/>
+
+        <!-- r2: rest-service -> Redis -->
+        <text x="413" y="140" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent-warm)">setIfAbsent idempotency:{scope}:{k}</text>
+        <line x1="305" y1="148" x2="520" y2="148" stroke="var(--accent-warm)" stroke-width="1.5" marker-end="url(#arrowWarmSeq)"/>
+
+        <!-- r3: Redis --> rest-service (return) -->
+        <text x="413" y="174" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent-warm)">acquired &rarr; IN_PROGRESS (TTL)</text>
+        <line x1="520" y1="182" x2="305" y2="182" stroke="var(--accent-warm)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrowWarmSeq)"/>
+
+        <!-- note: idempotency outcomes -->
+        <rect x="248" y="196" width="330" height="46" rx="6" fill="var(--surface-2)" stroke="var(--line-soft)"/>
+        <text x="413" y="216" text-anchor="middle" font-family="var(--font-mono)" font-style="italic" font-size="8.5" fill="var(--ink-muted)">IN_PROGRESS &rarr; 425 &middot; fingerprint mismatch &rarr; 409</text>
+        <text x="413" y="230" text-anchor="middle" font-family="var(--font-mono)" font-style="italic" font-size="8.5" fill="var(--ink-muted)">COMPLETED &rarr; replay cached Order, no re-execution</text>
+
+        <!-- r4: rest-service -> Postgres (crosses Redis lifeline) -->
+        <rect x="425" y="238" width="190" height="30" fill="var(--surface)"/>
+        <text x="520" y="248" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">BEGIN; INSERT order,</text>
+        <text x="520" y="260" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent-trace)">INSERT outbox (+ trace_context)</text>
+        <line x1="305" y1="262" x2="735" y2="262" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMainSeq)"/>
+
+        <!-- r5: Postgres --> rest-service (return, crosses Redis lifeline) -->
+        <rect x="455" y="278" width="130" height="18" fill="var(--surface)"/>
+        <text x="520" y="290" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">txn committed</text>
+        <line x1="735" y1="296" x2="305" y2="296" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrowMainSeq)"/>
+
+        <!-- r6: rest-service -> Redis -->
+        <text x="413" y="322" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent-warm)">set &hellip; COMPLETED(resultId)</text>
+        <line x1="305" y1="330" x2="520" y2="330" stroke="var(--accent-warm)" stroke-width="1.5" marker-end="url(#arrowWarmSeq)"/>
+
+        <!-- r7: rest-service --> Client (return) -->
+        <text x="197" y="356" text-anchor="middle" font-family="var(--font-mono)" font-size="10" fill="var(--accent)">201 Created &mdash; OrderResponse</text>
+        <line x1="305" y1="364" x2="90" y2="364" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrowMainSeq)"/>
+
+        <!-- divider -->
+        <rect x="585" y="380" width="300" height="20" fill="var(--surface)"/>
+        <text x="735" y="394" text-anchor="middle" font-family="var(--font-display)" font-style="italic" font-size="11.5" fill="var(--ink-muted)">&mdash; later, asynchronously, via CDC &mdash;</text>
+        <line x1="40" y1="390" x2="1420" y2="390" stroke="var(--line)" stroke-width="1" stroke-dasharray="2 6"/>
+
+        <!-- r8: Kafka Connect -> Postgres (reads WAL) -->
+        <text x="842" y="430" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">poll WAL via replication</text>
+        <text x="842" y="442" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">slot outbox_slot</text>
+        <line x1="950" y1="448" x2="735" y2="448" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMainSeq)"/>
+
+        <!-- r9: Postgres --> Kafka Connect (return) -->
+        <text x="842" y="464" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">outbox row</text>
+        <text x="842" y="476" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent-trace)">(+ trace_context col)</text>
+        <line x1="735" y1="482" x2="950" y2="482" stroke="var(--accent)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arrowMainSeq)"/>
+
+        <!-- r10: Kafka Connect -> Kafka -->
+        <text x="1057" y="498" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">publish outbox.event.order</text>
+        <text x="1057" y="510" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent-trace)">header: traceparent</text>
+        <line x1="950" y1="516" x2="1165" y2="516" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMainSeq)"/>
+
+        <!-- r11: Kafka -> email-service -->
+        <text x="1272" y="542" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">deliver &mdash; consumer group email-service</text>
+        <line x1="1165" y1="550" x2="1380" y2="550" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMainSeq)"/>
+
+        <!-- r12: email-service self-loop -->
+        <text x="1370" y="580" text-anchor="end" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent)">ConfirmationService.send()</text>
+        <text x="1370" y="594" text-anchor="end" font-family="var(--font-mono)" font-size="9.5" fill="var(--accent-warm)">@RateLimiter 5/10s &rarr; log + emails.sent++</text>
+        <path d="M1380,584 L1440,584 L1440,602 L1380,602" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#arrowMainSeq)"/>
+      </svg>
+    </div>
+    <figcaption>The request path (top) is synchronous and holds the Redis lock for its whole duration; the relay (bottom) runs later, in a different process, triggered by Debezium tailing Postgres rather than by anything rest-service does. Nothing in the bottom half knows the HTTP request ever returned.</figcaption>
+  </section>
+
+  <section class="figure-block">
+    <h2 class="figure-title">Operational plane</h2>
+    <p class="figure-kicker">how the two services are watched, independent of the data path above</p>
+
+    <div class="diagram-scroll compact">
+      <svg class="diagram narrow" viewBox="0 0 1000 340" role="img" aria-label="Prometheus scrapes metrics from rest-service, email-service, and the Kafka plus Kafka Connect metrics reporters. rest-service and email-service both push OpenTelemetry traces directly to Tempo. Grafana queries both Prometheus and Tempo as datasources. kafka-ui talks to Kafka and the Kafka Connect REST API directly, outside of this metrics and tracing path.">
+        <defs>
+          <marker id="arrowDim2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--mono-dim)"/>
+          </marker>
+          <marker id="arrowTrace2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--accent-trace)"/>
+          </marker>
+        </defs>
+
+        <!-- fan-in arrows to Prometheus -->
+        <path d="M130,230 L310,70" fill="none" stroke="var(--mono-dim)" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#arrowDim2)"/>
+        <path d="M370,230 L420,70" fill="none" stroke="var(--mono-dim)" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#arrowDim2)"/>
+        <path d="M630,230 L470,70" fill="none" stroke="var(--mono-dim)" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#arrowDim2)"/>
+
+        <!-- fan-in to Tempo -->
+        <path d="M130,230 L310,150" fill="none" stroke="var(--accent-trace)" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#arrowTrace2)"/>
+        <path d="M370,230 L420,150" fill="none" stroke="var(--accent-trace)" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#arrowTrace2)"/>
+
+        <!-- Prometheus/Tempo -> Grafana -->
+        <path d="M490,40 L600,60" fill="none" stroke="var(--mono-dim)" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#arrowDim2)"/>
+        <path d="M490,120 L600,100" fill="none" stroke="var(--accent-trace)" stroke-width="1.25" stroke-dasharray="5 4" marker-end="url(#arrowTrace2)"/>
+
+        <!-- kafka-ui <-> kafka+connect -->
+        <line x1="750" y1="265" x2="790" y2="265" stroke="var(--mono-dim)" stroke-width="1.5" marker-end="url(#arrowDim2)" marker-start="url(#arrowDim2)"/>
+
+        <!-- Prometheus -->
+        <rect x="270" y="10" width="220" height="60" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="380" y="35" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="14" fill="var(--ink)">Prometheus</text>
+        <text x="380" y="52" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">scrapes /actuator/prometheus</text>
+
+        <!-- Tempo -->
+        <rect x="270" y="90" width="220" height="60" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="380" y="115" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="14" fill="var(--ink)">Tempo</text>
+        <text x="380" y="132" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">OTLP :4318/v1/traces</text>
+
+        <!-- Grafana -->
+        <rect x="600" y="50" width="200" height="60" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="700" y="75" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="14" fill="var(--ink)">Grafana</text>
+        <text x="700" y="92" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">dashboards + service graph</text>
+
+        <!-- bottom row -->
+        <rect x="30" y="230" width="200" height="70" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="130" y="258" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="14" fill="var(--ink)">rest-service</text>
+        <text x="130" y="276" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">:8081</text>
+
+        <rect x="270" y="230" width="200" height="70" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="370" y="258" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="14" fill="var(--ink)">email-service</text>
+        <text x="370" y="276" text-anchor="middle" font-family="var(--font-mono)" font-size="9.5" fill="var(--ink-muted)">:8082</text>
+
+        <rect x="510" y="230" width="240" height="70" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="630" y="258" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="14" fill="var(--ink)">Kafka + Connect</text>
+        <text x="630" y="276" text-anchor="middle" font-family="var(--font-mono)" font-size="9" fill="var(--ink-muted)">strimzi metrics :9404</text>
+
+        <rect x="790" y="230" width="180" height="70" rx="10" fill="var(--surface)" stroke="var(--line)" stroke-width="1.5"/>
+        <text x="880" y="258" text-anchor="middle" font-family="var(--font-display)" font-weight="600" font-size="14" fill="var(--ink)">kafka-ui</text>
+        <text x="880" y="276" text-anchor="middle" font-family="var(--font-mono)" font-size="9" fill="var(--ink-muted)">topics · connect :8083</text>
+      </svg>
+    </div>
+
+    <div class="legend">
+      <span><span class="swatch"></span>scrapes metrics (Prometheus)</span>
+      <span class="trace"><span class="swatch"></span>pushes OTLP traces (Tempo)</span>
+      <span class="api"><span class="swatch"></span>direct API / UI query</span>
+    </div>
+
+    <figcaption>This plane is read-only with respect to the order flow above &mdash; nothing here is on the path between <code>rest-service</code> and <code>email-service</code>. kafka-ui is the odd one out: it queries Kafka and Kafka Connect's REST API (port 8083) directly, not through Prometheus or Grafana.</figcaption>
+  </section>
+
+  <footer class="colophon prose">
+    Source: <code>rest-service</code> and <code>email-service</code> modules, <code>k8s/02-kafka.yaml</code> through <code>k8s/07-redis.yaml</code>, and ADRs 0005&ndash;0006 in <code>docs/adr</code>.
+  </footer>
+
+</div>
+
+</body></html>
