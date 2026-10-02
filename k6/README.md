@@ -109,10 +109,11 @@ It runs two scenarios, in order:
    the same key with the same body returns the *same* order id instead of a new one; reusing the
    key with a different body is rejected (`409 Conflict`); a request with no `Idempotency-Key`
    header at all is rejected (`400 Bad Request`).
-2. **`concurrent_lock_demo`** (`CONCURRENT_VUS` VUs, started once the first scenario is done, all
-   racing one pre-shared brand-new key at effectively the same instant): exactly one request wins
-   the lock and gets `201`, every other concurrent request is rejected with `425 Too Early` — this
-   is what proves the lock itself, not just the sequential happy path above.
+2. **`concurrent_lock_demo`** (`CONCURRENT_REQUESTS` requests fired at once via `http.batch`, all
+   racing one pre-shared brand-new key): every response is either `201` or `425 Too Early`, and —
+   this is the actual safety property — every `201` among them carries the *same* order id. See
+   "Why assert on order ids, not on the 201/425 split" below for why the id check, not a fixed
+   count of `201`s vs `425`s, is what this scenario asserts.
 
 ### Run the idempotency script
 
@@ -129,17 +130,37 @@ k6 run k6/idempotency-load-test.js
 ```
 
 A passing run means: replays dedupe instead of duplicating, conflicting reuse and missing-header
-requests are both rejected correctly, and concurrent requests racing the same key really do
-serialize through the Redis lock rather than all succeeding independently.
+requests are both rejected correctly, and concurrent requests racing the same key never produce
+more than one actual Order, even when some of them race their way into a legitimate replay rather
+than a `425`.
 
-### How the concurrent scenario gets a deterministic result
+### Why assert on order ids, not on the 201/425 split
 
-k6 VUs don't share JavaScript state, so "exactly one 201, the rest 425" isn't asserted by having
-VUs compare notes — it's asserted with two custom `Counter` metrics
-(`idempotency_concurrent_acquired`, `idempotency_concurrent_rejected`) that k6 aggregates across
-every VU regardless of which one incremented them, checked via `thresholds` in the script's
-`options`. The shared key itself comes from `setup()`, which runs once before any scenario starts,
-so every VU in `concurrent_lock_demo` races the *same* key rather than each minting its own.
+`OrderController`'s `@ResponseStatus(201)` is fixed on the method, so **both** a genuine lock
+acquisition (`LockResult.Acquired`, which actually runs `createOrder`) **and** a replay
+(`LockResult.Replayable`, which just re-fetches the already-completed order) come back as `201` —
+only `LockResult.InProgress` becomes `425`. That means how many responses come back `201` versus
+`425` depends on exactly how the race interleaves with each request's processing time, not on
+correctness: if the winner finishes before a later racer's request is even handled by the
+server, that racer legitimately replays and *also* gets `201`. A fixed "exactly one `201`"
+assertion is flaky by construction — an earlier version of this script asserted exactly that and
+was observed failing (4 responses came back `201`, only 1 came back `425`) on a run where the
+underlying lock was working correctly the whole time.
+
+The property that actually matters is: every `201` returned during the race agrees on the same
+order id. If the lock were ever broken and two requests both ran `createOrder` for real, they'd
+create two different `Order` rows and return two different ids — that's what the script checks
+for, regardless of how many requests happened to observe "in progress" versus "already
+completed".
+
+Checking this requires comparing responses against each other, and k6 VUs don't share JavaScript
+state with one another — so `concurrent_lock_demo` fires its `CONCURRENT_REQUESTS` requests from
+a **single** VU/iteration via [`http.batch`](https://k6.io/docs/javascript-api/k6-http/batch/)
+instead of spreading them across separate k6 VUs. `http.batch`'s responses all land back in that
+one iteration as a plain array, so `concurrentDemo` can collect every `201`'s order id directly
+and assert `new Set(ids).size === 1` in ordinary JS. The shared key and body themselves still come
+from `setup()`, which runs once before either scenario, so every request in the batch races the
+same key.
 
 ### Idempotency script configuration
 
@@ -148,5 +169,5 @@ All parameters are overridable via environment variables (`k6 run -e NAME=value 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `REST_SERVICE_URL` | `http://localhost:8081` | Base URL of `rest-service` |
-| `CONCURRENT_VUS` | `5` | Number of VUs that simultaneously race the same brand-new key in `concurrent_lock_demo` |
+| `CONCURRENT_REQUESTS` | `5` | Number of requests fired at once via `http.batch` to race the same brand-new key in `concurrent_lock_demo` |
 | `CONCURRENT_START_OFFSET_SECONDS` | `5` | Delay before `concurrent_lock_demo` starts, giving `idempotency_demo` time to finish first |

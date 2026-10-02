@@ -10,34 +10,37 @@
 //      the same key with the same body returns the *same* order instead of a new one; reusing
 //      the key with a different body is rejected (409 Conflict); a request with no
 //      Idempotency-Key header at all is rejected (400 Bad Request).
-//   2. concurrent_lock_demo (CONCURRENT_VUS VUs, all racing one pre-shared key at once): exactly
-//      one request wins the lock and gets 201, every other concurrent request is rejected with
-//      425 Too Early — demonstrating the lock itself, not just its happy path.
+//   2. concurrent_lock_demo (CONCURRENT_REQUESTS requests fired at once via http.batch, all
+//      racing one pre-shared key): every response is either 201 (the lock was acquired, or the
+//      key had already completed and this is a replay) or 425 (another request currently holds
+//      the lock) — and, critically, every 201 among them carries the SAME order id. That's the
+//      actual safety property: no duplicate Order was created, regardless of how the race
+//      happened to interleave. See "Why assert on order ids, not on the 201/425 split" below.
 
 import http from 'k6/http';
 import { check, fail } from 'k6';
-import { Counter } from 'k6/metrics';
 
 const REST_SERVICE_URL = __ENV.REST_SERVICE_URL || 'http://localhost:8081';
 
-// How many VUs simultaneously race the same brand-new Idempotency-Key in concurrent_lock_demo.
-// shared-iterations with vus === iterations is k6's standard pattern for firing N requests at
-// effectively the same instant (every VU is started together and immediately claims one of the
-// N shared iterations) — see https://k6.io/docs/using-k6/scenarios/concurrency-and-race-conditions/.
-const CONCURRENT_VUS = Number(__ENV.CONCURRENT_VUS || 5);
+// How many requests race the same brand-new Idempotency-Key in concurrent_lock_demo, fired
+// together via http.batch from a single VU (see the comment on concurrentDemo for why a single
+// VU rather than many).
+const CONCURRENT_REQUESTS = Number(__ENV.CONCURRENT_REQUESTS || 5);
 
 // Gives idempotency_demo (started at t=0) time to finish its handful of sequential requests
 // before concurrent_lock_demo starts. idempotency_demo has no sleeps and does ~4 HTTP calls, so
 // this is a generous safety margin, not a measured minimum.
 const CONCURRENT_START_OFFSET_SECONDS = Number(__ENV.CONCURRENT_START_OFFSET_SECONDS || 5);
 
-// Aggregated across every VU in concurrent_lock_demo, so the "exactly one winner" assertion
-// doesn't require the VUs to share state directly — k6 aggregates Counters test-wide regardless
-// of which VU incremented them.
-const acquiredCount = new Counter('idempotency_concurrent_acquired');
-const rejectedCount = new Counter('idempotency_concurrent_rejected');
-
 export const options = {
+  // http.batch queues requests past these limits instead of firing them all at once, and since
+  // every concurrent_lock_demo request targets the same host, the default batchPerHost of 6
+  // would silently serialize part of the race for any CONCURRENT_REQUESTS above that — turning
+  // "requests racing simultaneously" into "requests racing, then replaying" without erroring.
+  // Both limits are raised to match the configured concurrency so the setting actually controls
+  // how many requests go out at once.
+  batch: CONCURRENT_REQUESTS,
+  batchPerHost: CONCURRENT_REQUESTS,
   scenarios: {
     idempotency_demo: {
       executor: 'shared-iterations',
@@ -48,8 +51,8 @@ export const options = {
     },
     concurrent_lock_demo: {
       executor: 'shared-iterations',
-      vus: CONCURRENT_VUS,
-      iterations: CONCURRENT_VUS,
+      vus: 1,
+      iterations: 1,
       exec: 'concurrentDemo',
       startTime: `${CONCURRENT_START_OFFSET_SECONDS}s`,
       maxDuration: '30s',
@@ -57,8 +60,6 @@ export const options = {
   },
   thresholds: {
     checks: ['rate==1.0'],
-    idempotency_concurrent_acquired: ['count==1'],
-    idempotency_concurrent_rejected: [`count==${CONCURRENT_VUS - 1}`],
   },
 };
 
@@ -75,7 +76,7 @@ function postOrder(key, body) {
 }
 
 // setup() runs exactly once, before either scenario, so this is the one place a value can be
-// generated that both scenarios (and every VU within concurrent_lock_demo) agree on.
+// generated that both scenarios agree on.
 export function setup() {
   return {
     concurrentKey: freshKey('concurrent'),
@@ -133,22 +134,90 @@ export function sequentialDemo() {
   console.log('[sequential] Stage 4 OK: missing header was rejected with 400.');
 }
 
+// Why assert on order ids, not on the 201/425 split:
+//
+// OrderController's @ResponseStatus(201) is fixed on the method, so BOTH a genuine lock
+// acquisition (LockResult.Acquired, which actually runs createOrder) and a replay
+// (LockResult.Replayable, which just re-fetches the already-completed order) come back as 201 —
+// only LockResult.InProgress becomes 425. That means "how many responses were 201" is a function
+// of exactly how the race interleaved with each request's processing time, not of correctness:
+// if the winner finishes before a later racer's request is even handled, that racer legitimately
+// replays and also gets 201. A fixed "exactly one 201" threshold is therefore flaky by
+// construction — it was observed failing locklessly (4x 201, 1x 425) while the actual safety
+// property (one Order, no duplicates) still held.
+//
+// The property that actually matters is: every 201 returned during the race agrees on the same
+// order id. If the lock were broken and two requests both ran createOrder for real, they'd
+// create two different Order rows and return two different ids — THAT'S what this checks for,
+// regardless of how many requests happened to see "in progress" vs "already completed".
+//
+// Firing the race via a single VU's http.batch (rather than N separate k6 VUs) is what makes the
+// comparison possible at all: k6 VUs run in isolated JS contexts and can't share state with each
+// other, but http.batch's responses all land back in the same VU/iteration, as a plain array, so
+// they can be compared directly.
 export function concurrentDemo(data) {
-  const res = postOrder(data.concurrentKey, data.concurrentBody);
-
-  if (res.status === 201) {
-    acquiredCount.add(1);
-  } else if (res.status === 425) {
-    rejectedCount.add(1);
+  const requests = [];
+  for (let i = 0; i < CONCURRENT_REQUESTS; i++) {
+    requests.push([
+      'POST',
+      `${REST_SERVICE_URL}/orders`,
+      JSON.stringify(data.concurrentBody),
+      { headers: { 'Content-Type': 'application/json', 'Idempotency-Key': data.concurrentKey } },
+    ]);
   }
 
-  const outcome = check(res, {
-    'concurrent request either wins the lock (201) or is rejected as in-progress (425)': (r) =>
-      r.status === 201 || r.status === 425,
+  console.log(
+    `[concurrent] Firing ${CONCURRENT_REQUESTS} concurrent POST /orders requests sharing one Idempotency-Key (${data.concurrentKey})`,
+  );
+  const responses = http.batch(requests);
+
+  const createdIds = [];
+  let acquiredOrReplayedCount = 0;
+  let inProgressCount = 0;
+
+  responses.forEach((res, i) => {
+    const validStatus = check(res, {
+      'concurrent request either creates/replays the order (201) or is rejected as in-progress (425)': (r) =>
+        r.status === 201 || r.status === 425,
+    });
+    if (!validStatus) {
+      fail(`request ${i} got an unexpected status racing for a shared key: ${res.status}, body ${res.body}`);
+    }
+
+    if (res.status === 201) {
+      acquiredOrReplayedCount++;
+      createdIds.push(res.json('id'));
+      console.log(`[concurrent] request ${i} got 201 (order ${res.json('id')}).`);
+    } else {
+      inProgressCount++;
+      console.log(`[concurrent] request ${i} got 425 (lock already held).`);
+    }
   });
-  if (!outcome) {
-    fail(`unexpected status racing for a shared key: ${res.status}, body ${res.body}`);
+
+  console.log(
+    `[concurrent] ${acquiredOrReplayedCount} request(s) got 201 (acquired the lock or replayed an ` +
+      `already-completed one), ${inProgressCount} got 425 (lock in progress). A 201 can mean either ` +
+      "outcome, so that split alone doesn't prove correctness — the order-id check below does.",
+  );
+
+  const atLeastOneCreated = check(createdIds, {
+    'at least one concurrent request got 201': (ids) => ids.length > 0,
+  });
+  if (!atLeastOneCreated) {
+    fail('every concurrent request was rejected with 425 — the lock was never acquired at all');
   }
 
-  console.log(`[concurrent] VU ${__VU} got ${res.status} for the shared key.`);
+  const distinctIds = new Set(createdIds);
+  const noDuplicateOrder = check(distinctIds, {
+    'every 201 response during the race returned the SAME order id (no duplicate order was created)': (ids) =>
+      ids.size === 1,
+  });
+  if (!noDuplicateOrder) {
+    fail(
+      `expected every concurrent 201 to agree on one order id, got ${distinctIds.size} distinct ids: ` +
+        `${[...distinctIds].join(', ')}`,
+    );
+  }
+
+  console.log(`[concurrent] OK: every 201 response agreed on order ${[...distinctIds][0]}, no duplicate created.`);
 }
